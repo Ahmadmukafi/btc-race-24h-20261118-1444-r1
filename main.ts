@@ -4,7 +4,14 @@
 // bounces after a sharp dip. Buy all cash when the close has fallen
 // DROP_BPS below the trailing LOOKBACK-bar high AND the last
 // CONFIRM_BARS bars all closed up (the dip is turning, not still
-// falling). Exit on a take-profit or a stop-loss measured from the
+// falling). A second, shallower trigger (MID_DROP_BPS with
+// SECOND_CONFIRM_BARS closes up) catches the dips the primary misses
+// but demands stronger confirmation: a shallow dip with weak
+// confirmation is just a falling market, the extra up close is what
+// separates a bounce from a slide. The primary fired only once in the
+// whole dev window and never in its second half, so without the second
+// trigger the bot risks entering the live race with no trade at all.
+// Exit on a take-profit or a stop-loss measured from the
 // actual fill price, then wait COOLDOWN_BARS before the next entry.
 // Long only, at most one open position, fully deterministic: all
 // integer (bigint) math, no clock, no randomness, no network.
@@ -18,9 +25,11 @@ import { runBars } from './vendor/makefun-bars.ts';
 const SYMBOL = 'CBBTC';
 const LOOKBACK = 120;
 const DROP_BPS = 150n;
+const MID_DROP_BPS = 120n;
 const TP_BPS = 200n;
 const SL_BPS = 100n;
 const CONFIRM_BARS = 2;
+const SECOND_CONFIRM_BARS = 3;
 const COOLDOWN_BARS = 10;
 const MAX_SLIPPAGE_BPS = 100;
 const BPS = 10000n;
@@ -81,7 +90,16 @@ await runBars({
         break;
       }
     }
-    if (close * BPS <= hi * (BPS - DROP_BPS) && up) {
+    let upStrong = up;
+    for (let k = CONFIRM_BARS + 1; k <= SECOND_CONFIRM_BARS; k++) {
+      if (closes[closes.length - k]! <= opens[opens.length - k]!) {
+        upStrong = false;
+        break;
+      }
+    }
+    const deepDip = close * BPS <= hi * (BPS - DROP_BPS);
+    const midDip = close * BPS <= hi * (BPS - MID_DROP_BPS);
+    if ((deepDip && up) || (midDip && upStrong)) {
       const spend = state.cash;
       if (spend < 1000000n) return [];
       return [{ side: 'buy', symbol: SYMBOL, notional_quote_units: spend, max_slippage_bps: MAX_SLIPPAGE_BPS }];
